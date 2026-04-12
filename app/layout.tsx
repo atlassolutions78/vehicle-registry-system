@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google"
+import { SessionProvider } from "next-auth/react"
 
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -24,9 +25,11 @@ export default function RootLayout({
       className={cn("antialiased", fontMono.variable, "font-sans", geist.variable)}
     >
       <body>
-        <ThemeProvider>
-          <TooltipProvider>{children}</TooltipProvider>
-        </ThemeProvider>
+        <SessionProvider>
+          <ThemeProvider>
+            <TooltipProvider>{children}</TooltipProvider>
+          </ThemeProvider>
+        </SessionProvider>
       </body>
     </html>
   )

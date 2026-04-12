@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
 import {
   Car,
   ChevronRight,
@@ -74,15 +75,19 @@ const vehiclesSubItems = [
   { title: "Sud-Kivu", href: "/vehicles/sud-kivu" },
 ]
 
-const mockUser = {
-  name: "Jean-Pierre Kalala",
-  username: "jp.kalala",
-  role: "ADMIN",
-  initials: "JK",
-}
-
 export function AppSidebar() {
   const pathname = usePathname()
+  const { data: session } = useSession()
+
+  const userName = session?.user?.name ?? "…"
+  const userUsername = session?.user?.username ?? ""
+  const userRole = session?.user?.role ?? "AGENT"
+  const userInitials = userName
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase()
   const [platesOpen, setPlatesOpen] = useState(() => pathname.startsWith("/plates"))
   const [vehiclesOpen, setVehiclesOpen] = useState(() => pathname.startsWith("/vehicles"))
 
@@ -289,20 +294,20 @@ export function AppSidebar() {
                 >
                   <Avatar className="size-8 rounded-lg">
                     <AvatarFallback className="rounded-lg bg-primary text-primary-foreground text-xs font-semibold">
-                      {mockUser.initials}
+                      {userInitials}
                     </AvatarFallback>
                   </Avatar>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold">{mockUser.name}</span>
+                    <span className="truncate font-semibold">{userName}</span>
                     <span className="truncate text-xs text-muted-foreground">
-                      @{mockUser.username}
+                      @{userUsername}
                     </span>
                   </div>
                   <Badge
                     variant="secondary"
                     className="shrink-0 text-[10px] font-semibold"
                   >
-                    {mockUser.role}
+                    {userRole}
                   </Badge>
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
@@ -316,7 +321,10 @@ export function AppSidebar() {
                   Paramètres du compte
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive">
+                <DropdownMenuItem
+                  className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                  onClick={() => signOut({ redirectTo: "/login" })}
+                >
                   <LogOut className="size-4" />
                   Déconnexion
                 </DropdownMenuItem>
