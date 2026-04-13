@@ -178,17 +178,6 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
     onOpenChange(false)
   }
 
-  // Plate status indicator
-  const plateStatusEl = isValidPlateInput && foundPlate !== undefined ? (
-    foundPlate === null ? (
-      <p className="text-xs text-muted-foreground">Plaque introuvable dans le système — elle sera créée sans plaque.</p>
-    ) : foundPlate.status === "disponible" ? (
-      <p className="text-xs text-green-600">Plaque disponible — sera attribuée automatiquement.</p>
-    ) : (
-      <p className="text-xs text-destructive">Plaque déjà attribuée à {foundPlate.owner ?? "un autre véhicule"}.</p>
-    )
-  ) : null
-
   return (
     <Sheet open={open} onOpenChange={handleClose}>
       <SheetContent className="flex flex-col gap-0 sm:max-w-2xl">
