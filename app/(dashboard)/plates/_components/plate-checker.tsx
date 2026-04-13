@@ -1,8 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import Link from "next/link"
 import { ArrowRight, CheckCircle2, Loader2, XCircle } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -16,100 +16,79 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PlateBadge } from "@/components/plate-badge"
-import { mockPlates, mockVehiclesForAssign, PROVINCES } from "./mock-data"
+import { trpc } from "@/lib/trpc/client"
 
-type CheckResult =
-  | { status: "available"; province: string; digits: string; letters: string; year: string }
-  | {
-      status: "taken"
-      province: string
-      digits: string
-      letters: string
-      year: string
-      owner: string
-      vehicle: string
-      usage: string
-      assignedAt: string
-      vehicleId: string
-    }
-  | null
+const PROVINCES = [
+  { code: "NKV", name: "Nord-Kivu" },
+  { code: "SKV", name: "Sud-Kivu" },
+]
 
-function checkPlateAvailability(
-  province: string,
-  digits: string,
-  letters: string,
-): CheckResult {
-  const found = mockPlates.find(
-    (p) =>
-      p.province === province &&
-      p.digits === digits &&
-      p.letters === letters.toUpperCase(),
-  )
-
-  if (!found || found.status === "disponible") {
-    return {
-      status: "available",
-      province,
-      digits,
-      letters: letters.toUpperCase(),
-      year: new Date().getFullYear().toString().slice(-2),
-    }
-  }
-
-  return {
-    status: "taken",
-    province: found.province,
-    digits: found.digits,
-    letters: found.letters,
-    year: found.year ?? "",
-    owner: found.owner ?? "",
-    vehicle: found.vehicle ?? "",
-    usage: found.usage ?? "",
-    assignedAt: found.assignedAt ?? "",
-    vehicleId: found.id,
-  }
+interface CheckInput {
+  provinceCode: string
+  digits: string
+  letters: string
 }
 
 export function PlateChecker() {
-  const [province, setProvince] = useState("KIN")
+  const [province, setProvince] = useState("NKV")
   const [digits, setDigits] = useState("")
   const [letters, setLetters] = useState("AA")
-  const [checking, setChecking] = useState(false)
-  const [result, setResult] = useState<CheckResult>(null)
+  const [checkInput, setCheckInput] = useState<CheckInput | null>(null)
   const [selectedVehicle, setSelectedVehicle] = useState("")
   const [assigned, setAssigned] = useState(false)
+  const utils = trpc.useUtils()
 
   const isFormValid =
     province.length > 0 &&
     /^\d{4}$/.test(digits) &&
     /^[A-Za-z]{2}$/.test(letters)
 
+  const { data: result, isFetching } = trpc.plates.check.useQuery(
+    checkInput ?? { provinceCode: "", digits: "", letters: "" },
+    { enabled: !!checkInput },
+  )
+
+  const { data: vehiclesData } = trpc.vehicles.list.useQuery(
+    { withoutPlate: true, limit: 100 },
+    { enabled: result?.status === "disponible" || result === null },
+  )
+
+  const assign = trpc.plates.assignToVehicle.useMutation({
+    onSuccess: () => {
+      utils.plates.list.invalidate()
+      toast.success("Plaque attribuée avec succès")
+      setAssigned(true)
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
   function handleCheck() {
     if (!isFormValid) return
-    setChecking(true)
-    setResult(null)
+    setCheckInput({ provinceCode: province, digits, letters: letters.toUpperCase() })
     setSelectedVehicle("")
     setAssigned(false)
-
-    // Simulate async check
-    setTimeout(() => {
-      setResult(checkPlateAvailability(province, digits, letters))
-      setChecking(false)
-    }, 600)
   }
 
   function handleAssign() {
-    if (!selectedVehicle) return
-    setAssigned(true)
+    if (!selectedVehicle || !result?.id) return
+    assign.mutate({ plateId: result.id, vehicleId: selectedVehicle })
   }
 
   function handleReset() {
     setDigits("")
     setLetters("AA")
-    setResult(null)
+    setCheckInput(null)
     setSelectedVehicle("")
     setAssigned(false)
   }
+
+  // result === undefined means query hasn't run yet
+  // result === null means plate not found in DB (available by absence)
+  const notFound = checkInput && !isFetching && result === null
+  const isAvailable = checkInput && !isFetching && (result?.status === "disponible" || notFound)
+  const isTaken = checkInput && !isFetching && result?.status === "attribuee"
+
+  const displayYear = result?.year ?? new Date().getFullYear().toString().slice(-2)
 
   return (
     <Card>
@@ -119,7 +98,7 @@ export function PlateChecker() {
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">
               <Label>Province</Label>
-              <Select value={province} onValueChange={setProvince}>
+              <Select value={province} onValueChange={(v) => { setProvince(v); setCheckInput(null) }}>
                 <SelectTrigger className="w-44">
                   <SelectValue />
                 </SelectTrigger>
@@ -142,34 +121,32 @@ export function PlateChecker() {
                 maxLength={4}
                 value={digits}
                 onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "")
-                  setDigits(v)
-                  setResult(null)
+                  setDigits(e.target.value.replace(/\D/g, ""))
+                  setCheckInput(null)
                 }}
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label>Suffix (2 lettres)</Label>
+              <Label>Suffixe (2 lettres)</Label>
               <Input
                 className="w-24 font-mono text-base uppercase tracking-widest"
                 placeholder="AA"
                 maxLength={2}
                 value={letters}
                 onChange={(e) => {
-                  const v = e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase()
-                  setLetters(v)
-                  setResult(null)
+                  setLetters(e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase())
+                  setCheckInput(null)
                 }}
               />
             </div>
 
             <Button
               onClick={handleCheck}
-              disabled={!isFormValid || checking}
+              disabled={!isFormValid || isFetching}
               className="gap-2"
             >
-              {checking ? (
+              {isFetching ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <ArrowRight className="size-4" />
@@ -193,15 +170,15 @@ export function PlateChecker() {
           )}
 
           {/* Result */}
-          {result && !assigned && (
+          {(isAvailable || isTaken) && !assigned && (
             <div
               className={`rounded-xl border p-4 ${
-                result.status === "available"
+                isAvailable
                   ? "border-green-200 bg-green-50 dark:border-green-800/40 dark:bg-green-900/10"
                   : "border-red-200 bg-red-50 dark:border-red-800/40 dark:bg-red-900/10"
               }`}
             >
-              {result.status === "available" ? (
+              {isAvailable ? (
                 <div className="flex flex-col gap-4">
                   <div className="flex items-center gap-3">
                     <CheckCircle2 className="size-5 shrink-0 text-green-600 dark:text-green-400" />
@@ -217,10 +194,10 @@ export function PlateChecker() {
 
                   <div className="flex flex-wrap items-center gap-6">
                     <PlateBadge
-                      province={result.province}
-                      digits={result.digits}
-                      letters={result.letters}
-                      year={result.year}
+                      province={province}
+                      digits={digits}
+                      letters={letters}
+                      year={displayYear}
                       size="lg"
                     />
 
@@ -231,9 +208,9 @@ export function PlateChecker() {
                           <SelectValue placeholder="Sélectionner un véhicule..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {mockVehiclesForAssign.map((v) => (
+                          {vehiclesData?.rows.map((v) => (
                             <SelectItem key={v.id} value={v.id}>
-                              {v.label}
+                              {v.owner} — {v.make} {v.type}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -242,10 +219,11 @@ export function PlateChecker() {
 
                     <Button
                       onClick={handleAssign}
-                      disabled={!selectedVehicle}
-                      className="self-end"
+                      disabled={!selectedVehicle || assign.isPending}
+                      className="self-end gap-2"
                     >
-                      Confirmer l'attribution
+                      {assign.isPending && <Loader2 className="size-4 animate-spin" />}
+                      Confirmer l&apos;attribution
                     </Button>
                   </div>
                 </div>
@@ -265,38 +243,50 @@ export function PlateChecker() {
 
                   <div className="flex flex-wrap items-start gap-6">
                     <PlateBadge
-                      province={result.province}
-                      digits={result.digits}
-                      letters={result.letters}
-                      year={result.year}
+                      province={result!.provinceCode}
+                      digits={result!.digits}
+                      letters={result!.letters}
+                      year={result!.year ?? undefined}
                       size="lg"
                     />
 
                     <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">Propriétaire</p>
-                        <p className="font-medium">{result.owner}</p>
+                        <p className="font-medium">{result!.owner ?? "—"}</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Usage</p>
-                        <p className="font-medium">{result.usage}</p>
+                        <p className="font-medium">{result!.usage ?? "—"}</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Véhicule</p>
-                        <p className="font-medium">{result.vehicle}</p>
+                        <p className="font-medium">
+                          {result!.make && result!.type ? `${result!.make} ${result!.type}` : "—"}
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Date d'attribution</p>
-                        <p className="font-medium">{result.assignedAt}</p>
+                        <p className="font-medium">
+                          {result!.assignedAt
+                            ? new Date(result!.assignedAt).toLocaleDateString("fr-FR", {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              })
+                            : "—"}
+                        </p>
                       </div>
                     </div>
 
-                    <Button asChild variant="outline" size="sm" className="self-end ml-auto">
-                      <Link href={`/vehicles/${result.vehicleId}`}>
-                        Voir le véhicule
-                        <ArrowRight className="size-3" />
-                      </Link>
-                    </Button>
+                    {result!.vehicleId && (
+                      <Button asChild variant="outline" size="sm" className="self-end ml-auto gap-1">
+                        <a href={`/vehicles/${result!.vehicleId}`}>
+                          Voir le véhicule
+                          <ArrowRight className="size-3" />
+                        </a>
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}
@@ -304,7 +294,7 @@ export function PlateChecker() {
           )}
 
           {/* Success confirmation */}
-          {assigned && result?.status === "available" && (
+          {assigned && (
             <div className="flex flex-col items-center gap-4 rounded-xl border border-green-200 bg-green-50 p-6 text-center dark:border-green-800/40 dark:bg-green-900/10">
               <CheckCircle2 className="size-10 text-green-600 dark:text-green-400" />
               <div>
@@ -316,10 +306,10 @@ export function PlateChecker() {
                 </p>
               </div>
               <PlateBadge
-                province={result.province}
-                digits={result.digits}
-                letters={result.letters}
-                year={result.year}
+                province={province}
+                digits={digits}
+                letters={letters}
+                year={displayYear}
                 size="lg"
               />
               <Button variant="outline" size="sm" onClick={handleReset}>

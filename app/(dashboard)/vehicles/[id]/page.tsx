@@ -1,12 +1,16 @@
-import { notFound } from "next/navigation"
+"use client"
+
+import { use } from "react"
 import Link from "next/link"
+import { notFound } from "next/navigation"
 import { ArrowLeft, CreditCard, Pencil, Printer, WifiOff } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
 import { PlateBadge } from "@/components/plate-badge"
-import { mockVehicles } from "../_components/mock-data"
+import { trpc } from "@/lib/trpc/client"
 import { CarteRoseView } from "./_components/carte-rose-view"
 
 const statusConfig = {
@@ -24,13 +28,25 @@ function DetailRow({ label, value }: { label: string; value: string | number }) 
   )
 }
 
-export default async function VehicleDetailPage({
+export default function VehicleDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
-  const { id } = await params
-  const vehicle = mockVehicles.find((v) => v.id === id)
+  const { id } = use(params)
+  const { data: vehicle, isLoading } = trpc.vehicles.byId.useQuery(id)
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-6 p-6">
+        <Skeleton className="h-10 w-48" />
+        <div className="grid gap-4 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-48 w-full" />)}
+        </div>
+      </div>
+    )
+  }
+
   if (!vehicle) notFound()
 
   const status = statusConfig[vehicle.status]
@@ -47,13 +63,15 @@ export default async function VehicleDetailPage({
             </Link>
           </Button>
           <div className="flex flex-wrap items-center gap-3">
-            <PlateBadge
-                province={vehicle.plateProvince}
-                digits={vehicle.plateDigits}
-                letters={vehicle.plateLetters}
-                year={vehicle.plateYear}
+            {vehicle.plateProvinceCode ? (
+              <PlateBadge
+                province={vehicle.plateProvinceCode}
+                digits={vehicle.plateDigits ?? ""}
+                letters={vehicle.plateLetters ?? ""}
+                year={vehicle.plateYear ?? undefined}
                 size="lg"
               />
+            ) : null}
             <div>
               <h1 className="text-xl font-semibold">{vehicle.owner}</h1>
               <p className="text-sm text-muted-foreground">
@@ -77,9 +95,8 @@ export default async function VehicleDetailPage({
         </div>
       </div>
 
-      {/* Info cards + NFC */}
+      {/* Info cards */}
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Owner */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Propriétaire</CardTitle>
@@ -91,7 +108,6 @@ export default async function VehicleDetailPage({
           </CardContent>
         </Card>
 
-        {/* Vehicle info */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Informations du véhicule</CardTitle>
@@ -101,12 +117,13 @@ export default async function VehicleDetailPage({
             <DetailRow label="1ère mise en circulation" value={vehicle.firstCirculation} />
             <DetailRow
               label="Numéro de plaque"
-              value={`${vehicle.plateProvince} ${vehicle.plateDigits} ${vehicle.plateLetters} ${vehicle.plateYear}`}
+              value={vehicle.plateProvinceCode
+                ? `${vehicle.plateProvinceCode} ${vehicle.plateDigits} ${vehicle.plateLetters} ${vehicle.plateYear ?? ""}`
+                : "—"}
             />
           </CardContent>
         </Card>
 
-        {/* Technical */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Données techniques</CardTitle>
@@ -140,18 +157,10 @@ export default async function VehicleDetailPage({
               {vehicle.nfcUid ? (
                 <p className="font-mono text-xs text-muted-foreground">{vehicle.nfcUid}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">
-                  Ce véhicule n'a pas encore de carte NFC associée.
-                </p>
+                <p className="text-xs text-muted-foreground">Ce véhicule n'a pas encore de carte NFC associée.</p>
               )}
             </div>
           </div>
-          {!vehicle.nfcUid && (
-            <Button size="sm" variant="outline" disabled>
-              <CreditCard className="size-4" />
-              Lier lors de la modification
-            </Button>
-          )}
         </CardContent>
       </Card>
 

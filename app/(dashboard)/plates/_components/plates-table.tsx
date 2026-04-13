@@ -19,15 +19,32 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { PlateBadge } from "@/components/plate-badge"
+import { trpc, type RouterOutputs } from "@/lib/trpc/client"
+import { toast } from "sonner"
 import { AssignPlateDialog } from "./assign-plate-dialog"
-import type { Plate } from "./mock-data"
+
+type PlateRow = RouterOutputs["plates"]["list"]["rows"][number]
 
 interface PlatesTableProps {
-  plates: Plate[]
+  plates: PlateRow[]
+}
+
+function formatDate(date: Date | string | null | undefined) {
+  if (!date) return "—"
+  return new Date(date).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })
 }
 
 export function PlatesTable({ plates }: PlatesTableProps) {
-  const [assignTarget, setAssignTarget] = useState<Plate | null>(null)
+  const [assignTarget, setAssignTarget] = useState<PlateRow | null>(null)
+  const utils = trpc.useUtils()
+
+  const release = trpc.plates.release.useMutation({
+    onSuccess: () => {
+      utils.plates.list.invalidate()
+      toast.success("Plaque libérée avec succès")
+    },
+    onError: (err) => toast.error(err.message),
+  })
 
   if (plates.length === 0) {
     return (
@@ -57,10 +74,10 @@ export function PlatesTable({ plates }: PlatesTableProps) {
             <TableRow key={plate.id}>
               <TableCell>
                 <PlateBadge
-                  province={plate.province}
+                  province={plate.provinceCode}
                   digits={plate.digits}
                   letters={plate.letters}
-                  year={plate.year}
+                  year={plate.year ?? undefined}
                   size="sm"
                 />
               </TableCell>
@@ -79,13 +96,13 @@ export function PlatesTable({ plates }: PlatesTableProps) {
                 {plate.owner ?? <span className="text-muted-foreground">—</span>}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
-                {plate.vehicle ?? "—"}
+                {plate.make && plate.type ? `${plate.make} ${plate.type}` : "—"}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {plate.usage ?? "—"}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
-                {plate.assignedAt ?? "—"}
+                {formatDate(plate.assignedAt)}
               </TableCell>
               <TableCell>
                 {plate.status === "disponible" ? (
@@ -108,7 +125,11 @@ export function PlatesTable({ plates }: PlatesTableProps) {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem>Voir le véhicule</DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive focus:text-destructive">
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => release.mutate({ id: plate.id })}
+                        disabled={release.isPending}
+                      >
                         Libérer la plaque
                       </DropdownMenuItem>
                     </DropdownMenuContent>

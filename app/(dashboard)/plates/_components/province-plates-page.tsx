@@ -1,17 +1,22 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { NewPlateSheet } from "./new-plate-sheet"
 import { PlatesTable } from "./plates-table"
-import { mockPlates, PROVINCES } from "./mock-data"
-import type { PlateStatus } from "./mock-data"
+import { trpc } from "@/lib/trpc/client"
 
-type FilterTab = "toutes" | PlateStatus
+type FilterTab = "toutes" | "disponible" | "attribuee"
 const PAGE_SIZE = 10
+
+const PROVINCE_NAMES: Record<string, string> = {
+  NKV: "Nord-Kivu",
+  SKV: "Sud-Kivu",
+}
 
 interface ProvincePlatesPageProps {
   provinceCode: string
@@ -19,30 +24,29 @@ interface ProvincePlatesPageProps {
 
 export function ProvincePlatesPage({ provinceCode }: ProvincePlatesPageProps) {
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("toutes")
   const [page, setPage] = useState(1)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const province = PROVINCES.find((p) => p.code === provinceCode)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 400)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const filtered = useMemo(() => {
-    setPage(1)
-    return mockPlates.filter((p) => {
-      if (p.province !== provinceCode) return false
-      const matchesSearch =
-        search === "" ||
-        p.digits.includes(search) ||
-        p.letters.toLowerCase().includes(search.toLowerCase()) ||
-        p.owner?.toLowerCase().includes(search.toLowerCase()) ||
-        p.vehicle?.toLowerCase().includes(search.toLowerCase())
-      const matchesTab = tab === "toutes" || p.status === tab
-      return matchesSearch && matchesTab
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, tab, provinceCode])
+  useEffect(() => { setPage(1) }, [debouncedSearch, tab])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const { data, isLoading } = trpc.plates.list.useQuery({
+    provinceCode,
+    status: tab === "toutes" ? undefined : tab,
+    search: debouncedSearch || undefined,
+    limit: PAGE_SIZE,
+    offset: (page - 1) * PAGE_SIZE,
+  })
+
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const provinceName = PROVINCE_NAMES[provinceCode] ?? provinceCode
 
   const tabs: { value: FilterTab; label: string }[] = [
     { value: "toutes", label: "Toutes" },
@@ -55,9 +59,9 @@ export function ProvincePlatesPage({ provinceCode }: ProvincePlatesPageProps) {
       {/* Title row */}
       <div className="flex items-center justify-between gap-4 pb-5">
         <div>
-          <h1 className="text-xl font-semibold">Plaques — {province?.name ?? provinceCode}</h1>
+          <h1 className="text-xl font-semibold">Plaques — {provinceName}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Plaques immatriculées en {province?.name ?? provinceCode}
+            Plaques immatriculées en {provinceName}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -96,13 +100,21 @@ export function ProvincePlatesPage({ provinceCode }: ProvincePlatesPageProps) {
         </nav>
       </div>
 
-      {/* Table */}
-      <PlatesTable plates={paginated} />
+      {/* Table or skeleton */}
+      {isLoading ? (
+        <div className="py-4 flex flex-col gap-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      ) : (
+        <PlatesTable plates={data?.rows ?? []} />
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-between border-t px-1 pt-4">
         <p className="text-sm text-muted-foreground">
-          Affichage {filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} sur {filtered.length} plaques
+          Affichage {total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} sur {total} plaques
         </p>
 
         {totalPages > 1 && (

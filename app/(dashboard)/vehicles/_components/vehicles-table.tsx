@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { Car, CreditCard, MoreHorizontal, WifiOff } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -20,7 +21,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { PlateBadge } from "@/components/plate-badge"
-import type { Vehicle } from "./mock-data"
+import { trpc, type RouterOutputs } from "@/lib/trpc/client"
+
+type VehicleRow = RouterOutputs["vehicles"]["list"]["rows"][number]
 
 const colorDot: Record<string, string> = {
   Blanc: "bg-gray-100 border border-gray-300",
@@ -31,6 +34,7 @@ const colorDot: Record<string, string> = {
   Bleu: "bg-blue-500",
   Vert: "bg-green-500",
   Jaune: "bg-yellow-400",
+  Marron: "bg-amber-800",
 }
 
 const statusConfig = {
@@ -40,10 +44,17 @@ const statusConfig = {
 }
 
 interface VehiclesTableProps {
-  vehicles: Vehicle[]
+  vehicles: VehicleRow[]
 }
 
 export function VehiclesTable({ vehicles }: VehiclesTableProps) {
+  const utils = trpc.useUtils()
+
+  const updateStatus = trpc.vehicles.updateStatus.useMutation({
+    onSuccess: () => utils.vehicles.list.invalidate(),
+    onError: (err) => toast.error(err.message),
+  })
+
   if (vehicles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
@@ -57,17 +68,14 @@ export function VehiclesTable({ vehicles }: VehiclesTableProps) {
     <Table>
       <TableHeader className="bg-muted">
         <TableRow>
-          {/* Side 1 — Propriétaire */}
           <TableHead>N° Plaque</TableHead>
           <TableHead>Nom / Raison Sociale</TableHead>
           <TableHead>N° Impôt</TableHead>
           <TableHead>1ère Circulation</TableHead>
           <TableHead>Usage</TableHead>
-          {/* Side 2 — Véhicule */}
           <TableHead>Marque & Type</TableHead>
           <TableHead>Couleur</TableHead>
           <TableHead>Puissance</TableHead>
-          {/* System */}
           <TableHead>NFC</TableHead>
           <TableHead>Statut</TableHead>
           <TableHead className="w-12" />
@@ -80,13 +88,17 @@ export function VehiclesTable({ vehicles }: VehiclesTableProps) {
           return (
             <TableRow key={vehicle.id}>
               <TableCell>
-                <PlateBadge
-                  province={vehicle.plateProvince}
-                  digits={vehicle.plateDigits}
-                  letters={vehicle.plateLetters}
-                  year={vehicle.plateYear}
-                  size="sm"
-                />
+                {vehicle.plateProvinceCode ? (
+                  <PlateBadge
+                    province={vehicle.plateProvinceCode}
+                    digits={vehicle.plateDigits ?? ""}
+                    letters={vehicle.plateLetters ?? ""}
+                    year={vehicle.plateYear ?? undefined}
+                    size="sm"
+                  />
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                )}
               </TableCell>
               <TableCell>
                 <p className="text-sm font-medium">{vehicle.owner}</p>
@@ -144,14 +156,27 @@ export function VehiclesTable({ vehicles }: VehiclesTableProps) {
                     <DropdownMenuItem asChild>
                       <Link href={`/vehicles/${vehicle.id}`}>Voir la Carte Rose</Link>
                     </DropdownMenuItem>
-                    <DropdownMenuItem>Modifier</DropdownMenuItem>
                     {!vehicle.nfcUid && (
                       <DropdownMenuItem>Lier une carte NFC</DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem className="text-destructive focus:text-destructive">
-                      Suspendre
-                    </DropdownMenuItem>
+                    {vehicle.status !== "suspendu" && (
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => updateStatus.mutate({ id: vehicle.id, status: "suspendu" })}
+                        disabled={updateStatus.isPending}
+                      >
+                        Suspendre
+                      </DropdownMenuItem>
+                    )}
+                    {vehicle.status === "suspendu" && (
+                      <DropdownMenuItem
+                        onClick={() => updateStatus.mutate({ id: vehicle.id, status: "actif" })}
+                        disabled={updateStatus.isPending}
+                      >
+                        Réactiver
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </TableCell>

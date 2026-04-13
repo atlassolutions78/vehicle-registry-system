@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { CheckCircle } from "lucide-react"
+import { CheckCircle, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -20,10 +20,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PlateBadge } from "@/components/plate-badge"
-import { mockVehiclesForAssign, type Plate } from "./mock-data"
+import { trpc, type RouterOutputs } from "@/lib/trpc/client"
+import { toast } from "sonner"
+
+type PlateRow = RouterOutputs["plates"]["list"]["rows"][number]
 
 interface AssignPlateDialogProps {
-  plate: Plate
+  plate: PlateRow
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -31,15 +34,31 @@ interface AssignPlateDialogProps {
 export function AssignPlateDialog({ plate, open, onOpenChange }: AssignPlateDialogProps) {
   const [selectedVehicle, setSelectedVehicle] = useState("")
   const [confirmed, setConfirmed] = useState(false)
+  const utils = trpc.useUtils()
+
+  const { data: vehiclesData } = trpc.vehicles.list.useQuery(
+    { withoutPlate: true, limit: 100 },
+    { enabled: open },
+  )
+
+  const assign = trpc.plates.assignToVehicle.useMutation({
+    onSuccess: () => {
+      utils.plates.list.invalidate()
+      toast.success("Plaque attribuée avec succès")
+      setConfirmed(true)
+    },
+    onError: (err) => toast.error(err.message),
+  })
 
   function handleConfirm() {
     if (!selectedVehicle) return
-    setConfirmed(true)
+    assign.mutate({ plateId: plate.id, vehicleId: selectedVehicle })
   }
 
   function handleClose() {
     setSelectedVehicle("")
     setConfirmed(false)
+    assign.reset()
     onOpenChange(false)
   }
 
@@ -59,9 +78,10 @@ export function AssignPlateDialog({ plate, open, onOpenChange }: AssignPlateDial
               <div className="flex flex-col items-center gap-2">
                 <p className="text-xs text-muted-foreground">Plaque sélectionnée</p>
                 <PlateBadge
-                  province={plate.province}
+                  province={plate.provinceCode}
                   digits={plate.digits}
                   letters={plate.letters}
+                  year={plate.year ?? undefined}
                   size="lg"
                 />
               </div>
@@ -73,22 +93,30 @@ export function AssignPlateDialog({ plate, open, onOpenChange }: AssignPlateDial
                     <SelectValue placeholder="Rechercher un véhicule..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {mockVehiclesForAssign.map((v) => (
+                    {vehiclesData?.rows.map((v) => (
                       <SelectItem key={v.id} value={v.id}>
-                        {v.label}
+                        {v.owner} — {v.make} {v.type}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
+              {assign.error && (
+                <p className="text-sm text-destructive">{assign.error.message}</p>
+              )}
             </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={handleClose}>
                 Annuler
               </Button>
-              <Button onClick={handleConfirm} disabled={!selectedVehicle}>
-                Confirmer l'attribution
+              <Button onClick={handleConfirm} disabled={!selectedVehicle || assign.isPending}>
+                {assign.isPending ? (
+                  <><Loader2 className="mr-2 size-4 animate-spin" />En cours…</>
+                ) : (
+                  "Confirmer l'attribution"
+                )}
               </Button>
             </DialogFooter>
           </>
@@ -104,9 +132,10 @@ export function AssignPlateDialog({ plate, open, onOpenChange }: AssignPlateDial
               </p>
             </div>
             <PlateBadge
-              province={plate.province}
+              province={plate.provinceCode}
               digits={plate.digits}
               letters={plate.letters}
+              year={plate.year ?? undefined}
               size="lg"
             />
             <Button onClick={handleClose} className="mt-2 w-full">

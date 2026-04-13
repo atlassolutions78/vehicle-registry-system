@@ -1,17 +1,22 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { NewVehicleSheet } from "./new-vehicle-sheet"
 import { VehiclesTable } from "./vehicles-table"
-import { mockVehicles, PROVINCES } from "./mock-data"
-import type { RegistrationStatus } from "./mock-data"
+import { trpc } from "@/lib/trpc/client"
 
-type FilterTab = "tous" | RegistrationStatus
+type FilterTab = "tous" | "actif" | "en_attente" | "suspendu"
 const PAGE_SIZE = 10
+
+const PROVINCE_NAMES: Record<string, string> = {
+  NKV: "Nord-Kivu",
+  SKV: "Sud-Kivu",
+}
 
 interface ProvinceVehiclesPageProps {
   provinceCode: string
@@ -19,30 +24,29 @@ interface ProvinceVehiclesPageProps {
 
 export function ProvinceVehiclesPage({ provinceCode }: ProvinceVehiclesPageProps) {
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("tous")
   const [page, setPage] = useState(1)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const province = PROVINCES.find((p) => p.code === provinceCode)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 400)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const filtered = useMemo(() => {
-    setPage(1)
-    return mockVehicles.filter((v) => {
-      if (v.plateProvince !== provinceCode) return false
-      const matchesSearch =
-        search === "" ||
-        v.owner.toLowerCase().includes(search.toLowerCase()) ||
-        v.plateDigits.includes(search) ||
-        v.make.toLowerCase().includes(search.toLowerCase()) ||
-        v.chassisNumber.toLowerCase().includes(search.toLowerCase())
-      const matchesTab = tab === "tous" || v.status === tab
-      return matchesSearch && matchesTab
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, tab, provinceCode])
+  useEffect(() => { setPage(1) }, [debouncedSearch, tab])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const { data, isLoading } = trpc.vehicles.list.useQuery({
+    provinceCode,
+    status: tab === "tous" ? undefined : tab,
+    search: debouncedSearch || undefined,
+    limit: PAGE_SIZE,
+    offset: (page - 1) * PAGE_SIZE,
+  })
+
+  const total = data?.count ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const provinceName = PROVINCE_NAMES[provinceCode] ?? provinceCode
 
   const tabs: { value: FilterTab; label: string }[] = [
     { value: "tous", label: "Tous" },
@@ -56,9 +60,9 @@ export function ProvinceVehiclesPage({ provinceCode }: ProvinceVehiclesPageProps
       {/* Title row */}
       <div className="flex items-center justify-between gap-4 pb-5">
         <div>
-          <h1 className="text-xl font-semibold">Véhicules — {province?.name ?? provinceCode}</h1>
+          <h1 className="text-xl font-semibold">Véhicules — {provinceName}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Véhicules enregistrés en {province?.name ?? provinceCode}
+            Véhicules enregistrés en {provinceName}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -97,13 +101,21 @@ export function ProvinceVehiclesPage({ provinceCode }: ProvinceVehiclesPageProps
         </nav>
       </div>
 
-      {/* Table */}
-      <VehiclesTable vehicles={paginated} />
+      {/* Table or skeleton */}
+      {isLoading ? (
+        <div className="py-4 flex flex-col gap-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      ) : (
+        <VehiclesTable vehicles={data?.rows ?? []} />
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-between border-t px-1 pt-4">
         <p className="text-sm text-muted-foreground">
-          Affichage {filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} sur {filtered.length} véhicules
+          Affichage {total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} sur {total} véhicules
         </p>
 
         {totalPages > 1 && (
@@ -125,17 +137,13 @@ export function ProvinceVehiclesPage({ provinceCode }: ProvinceVehiclesPageProps
               }, [])
               .map((item, idx) =>
                 item === "…" ? (
-                  <span key={`e${idx}`} className="flex size-8 items-center justify-center text-sm text-muted-foreground">
-                    …
-                  </span>
+                  <span key={`e${idx}`} className="flex size-8 items-center justify-center text-sm text-muted-foreground">…</span>
                 ) : (
                   <button
                     key={item}
                     onClick={() => setPage(item)}
                     className={`flex size-8 items-center justify-center rounded-md text-sm transition-colors ${
-                      item === page
-                        ? "bg-foreground text-background font-medium"
-                        : "border hover:bg-muted"
+                      item === page ? "bg-foreground text-background font-medium" : "border hover:bg-muted"
                     }`}
                   >
                     {item}
