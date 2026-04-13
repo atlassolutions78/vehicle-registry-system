@@ -1,41 +1,41 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { NewVehicleSheet } from "./_components/new-vehicle-sheet"
 import { VehiclesTable } from "./_components/vehicles-table"
-import { mockVehicles } from "./_components/mock-data"
-import type { RegistrationStatus } from "./_components/mock-data"
+import { trpc } from "@/lib/trpc/client"
 
-type FilterTab = "tous" | RegistrationStatus
+type FilterTab = "tous" | "actif" | "en_attente" | "suspendu"
 const PAGE_SIZE = 10
 
 export default function VehiclesPage() {
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("tous")
   const [page, setPage] = useState(1)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const filtered = useMemo(() => {
-    setPage(1)
-    return mockVehicles.filter((v) => {
-      const matchesSearch =
-        search === "" ||
-        v.owner.toLowerCase().includes(search.toLowerCase()) ||
-        v.plateDigits.includes(search) ||
-        v.make.toLowerCase().includes(search.toLowerCase()) ||
-        v.chassisNumber.toLowerCase().includes(search.toLowerCase())
-      const matchesTab = tab === "tous" || v.status === tab
-      return matchesSearch && matchesTab
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, tab])
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 400)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  useEffect(() => { setPage(1) }, [debouncedSearch, tab])
+
+  const { data, isLoading } = trpc.vehicles.list.useQuery({
+    status: tab === "tous" ? undefined : tab,
+    search: debouncedSearch || undefined,
+    limit: PAGE_SIZE,
+    offset: (page - 1) * PAGE_SIZE,
+  })
+
+  const total = data?.count ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const tabs: { value: FilterTab; label: string }[] = [
     { value: "tous", label: "Tous" },
@@ -85,13 +85,21 @@ export default function VehiclesPage() {
         </nav>
       </div>
 
-      {/* Table */}
-      <VehiclesTable vehicles={paginated} />
+      {/* Table or skeleton */}
+      {isLoading ? (
+        <div className="py-4 flex flex-col gap-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      ) : (
+        <VehiclesTable vehicles={data?.rows ?? []} />
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-between border-t px-1 pt-4">
         <p className="text-sm text-muted-foreground">
-          Affichage {filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} sur {filtered.length} véhicules
+          Affichage {total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} sur {total} véhicules
         </p>
 
         {totalPages > 1 && (
@@ -113,17 +121,13 @@ export default function VehiclesPage() {
               }, [])
               .map((item, idx) =>
                 item === "…" ? (
-                  <span key={`e${idx}`} className="flex size-8 items-center justify-center text-sm text-muted-foreground">
-                    …
-                  </span>
+                  <span key={`e${idx}`} className="flex size-8 items-center justify-center text-sm text-muted-foreground">…</span>
                 ) : (
                   <button
                     key={item}
                     onClick={() => setPage(item)}
                     className={`flex size-8 items-center justify-center rounded-md text-sm transition-colors ${
-                      item === page
-                        ? "bg-foreground text-background font-medium"
-                        : "border hover:bg-muted"
+                      item === page ? "bg-foreground text-background font-medium" : "border hover:bg-muted"
                     }`}
                   >
                     {item}

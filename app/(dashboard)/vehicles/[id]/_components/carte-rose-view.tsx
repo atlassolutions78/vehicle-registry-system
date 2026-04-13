@@ -1,10 +1,12 @@
 import { CreditCard } from "lucide-react"
 
 import { PlateBadge } from "@/components/plate-badge"
-import type { Vehicle } from "../../_components/mock-data"
+import type { RouterOutputs } from "@/lib/trpc/client"
+
+type VehicleDetail = RouterOutputs["vehicles"]["byId"]
 
 interface CarteRoseViewProps {
-  vehicle: Vehicle
+  vehicle: VehicleDetail
 }
 
 function Field({ label, value }: { label: string; value: string | number }) {
@@ -30,15 +32,12 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
           className="relative flex flex-1 flex-col overflow-hidden rounded-xl shadow-lg"
           style={{ background: "linear-gradient(135deg, #5b21b6 0%, #7c3aed 40%, #a855f7 100%)" }}
         >
-          {/* Watermark circles */}
           <div className="absolute -right-8 -top-8 size-40 rounded-full bg-white/5" />
           <div className="absolute -bottom-10 -left-6 size-32 rounded-full bg-white/5" />
           <div className="absolute right-16 top-8 size-20 rounded-full bg-white/5" />
-          {/* Left accent bar */}
           <div className="absolute bottom-0 left-0 top-0 w-6 bg-yellow-400/80" />
 
           <div className="flex flex-col gap-3 py-4 pl-10 pr-4">
-            {/* Header */}
             <div className="text-right">
               <p className="text-[7px] font-semibold uppercase tracking-widest text-white/70">
                 République Démocratique du Congo
@@ -49,7 +48,6 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
               <p className="text-[8px] text-white/70">Identification du Propriétaire</p>
             </div>
 
-            {/* Fields */}
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
               <div className="col-span-2">
                 <Field label="Nom ou Raison Sociale" value={vehicle.owner} />
@@ -66,17 +64,20 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
                 <span className="text-[7px] font-semibold uppercase tracking-widest text-white/60">
                   Numéro Plaque
                 </span>
-                <PlateBadge
-                  province={vehicle.plateProvince}
-                  digits={vehicle.plateDigits}
-                  letters={vehicle.plateLetters}
-                  year={vehicle.plateYear}
-                  size="sm"
-                />
+                {vehicle.plateProvinceCode ? (
+                  <PlateBadge
+                    province={vehicle.plateProvinceCode}
+                    digits={vehicle.plateDigits ?? ""}
+                    letters={vehicle.plateLetters ?? ""}
+                    year={vehicle.plateYear ?? undefined}
+                    size="sm"
+                  />
+                ) : (
+                  <span className="text-[10px] text-white/50">Non attribuée</span>
+                )}
               </div>
             </div>
 
-            {/* DRC Flag */}
             <div className="flex justify-end text-xl">🇨🇩</div>
           </div>
         </div>
@@ -91,14 +92,11 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
           className="relative flex flex-1 flex-col overflow-hidden rounded-xl shadow-lg"
           style={{ background: "linear-gradient(135deg, #5b21b6 0%, #7c3aed 40%, #a855f7 100%)" }}
         >
-          {/* Watermark circles */}
           <div className="absolute -right-8 -top-8 size-40 rounded-full bg-white/5" />
           <div className="absolute -bottom-10 -left-6 size-32 rounded-full bg-white/5" />
-          {/* Left accent bar */}
           <div className="absolute bottom-0 left-0 top-0 w-6 bg-yellow-400/80" />
 
           <div className="flex flex-col gap-3 py-4 pl-10 pr-4">
-            {/* Header */}
             <div className="text-right">
               <p className="text-[7px] font-semibold uppercase tracking-widest text-white/70">
                 République Démocratique du Congo
@@ -108,7 +106,6 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
               </p>
             </div>
 
-            {/* Fields */}
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
               <Field label="Marque" value={vehicle.make} />
               <Field label="Type / Modèle" value={vehicle.type} />
@@ -119,7 +116,6 @@ export function CarteRoseView({ vehicle }: CarteRoseViewProps) {
               <Field label="Puissance Fiscale" value={`${vehicle.fiscalPower} CV`} />
             </div>
 
-            {/* NFC chip */}
             <div className="flex justify-end">
               <div className="flex size-9 items-center justify-center rounded-md bg-yellow-400/90">
                 <CreditCard className="size-4 text-yellow-900" />

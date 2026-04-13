@@ -1,13 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowRight, CreditCard, ScanLine, SearchX, Wifi } from "lucide-react"
+import { ArrowRight, CreditCard, Loader2, ScanLine, SearchX, Wifi } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { PlateBadge } from "@/components/plate-badge"
-import { mockVehicles, type Vehicle } from "../../vehicles/_components/mock-data"
+import { trpc } from "@/lib/trpc/client"
+import { toast } from "sonner"
 import { CarteRoseView } from "../../vehicles/[id]/_components/carte-rose-view"
 
 const statusConfig = {
@@ -16,41 +17,51 @@ const statusConfig = {
   suspendu: { label: "Suspendu", className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
 }
 
-// Vehicles that have an NFC UID — for demo quick-scan
-const nfcVehicles = mockVehicles.filter((v) => v.nfcUid)
-
 type SearchState = "idle" | "found" | "not_found"
 
 export default function NfcVerifyPage() {
   const [uid, setUid] = useState("")
+  const [searchUid, setSearchUid] = useState<string | null>(null)
   const [state, setState] = useState<SearchState>("idle")
-  const [result, setResult] = useState<Vehicle | null>(null)
+
+  const { data: nfcVehiclesData } = trpc.vehicles.list.useQuery({ limit: 50 })
+  const nfcVehicles = nfcVehiclesData?.rows.filter((v) => v.nfcUid) ?? []
+
+  const { data: result, isFetching, isSuccess } = trpc.vehicles.byNfcUid.useQuery(
+    searchUid ?? "",
+    {
+      enabled: !!searchUid,
+    },
+  )
+
+  // Derive state from query result
+  const displayState: SearchState = !searchUid ? "idle" : isFetching ? "idle" : isSuccess ? (result ? "found" : "not_found") : "idle"
+
+  // Toast feedback when result arrives
+  useEffect(() => {
+    if (!isSuccess || !searchUid) return
+    if (result) {
+      toast.success(`Véhicule identifié : ${result.owner}`)
+    } else {
+      toast.error("Aucun véhicule trouvé pour cet UID")
+    }
+  }, [isSuccess, searchUid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function search(value?: string) {
     const query = (value ?? uid).trim().toUpperCase()
     if (!query) return
-
-    const found = mockVehicles.find(
-      (v) => v.nfcUid?.toUpperCase() === query
-    )
-    if (found) {
-      setResult(found)
-      setState("found")
-    } else {
-      setResult(null)
-      setState("not_found")
-    }
+    setSearchUid(query)
   }
 
-  function handleQuickScan(vehicle: Vehicle) {
-    setUid(vehicle.nfcUid!)
-    search(vehicle.nfcUid!)
+  function handleQuickScan(nfcUid: string) {
+    setUid(nfcUid)
+    setSearchUid(nfcUid.toUpperCase())
   }
 
   function reset() {
     setUid("")
+    setSearchUid(null)
     setState("idle")
-    setResult(null)
   }
 
   return (
@@ -65,14 +76,12 @@ export default function NfcVerifyPage() {
 
       {/* Search area */}
       <div className="mx-auto w-full max-w-xl">
-        {/* NFC icon */}
         <div className="mb-6 flex justify-center">
           <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10">
             <Wifi className="size-8 text-primary" />
           </div>
         </div>
 
-        {/* Input */}
         <div className="flex gap-2">
           <div className="relative flex-1">
             <ScanLine className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -82,15 +91,16 @@ export default function NfcVerifyPage() {
               value={uid}
               onChange={(e) => {
                 setUid(e.target.value)
-                if (state !== "idle") setState("idle")
+                if (displayState !== "idle") setState("idle")
               }}
               onKeyDown={(e) => e.key === "Enter" && search()}
             />
           </div>
-          <Button onClick={() => search()} disabled={!uid.trim()}>
+          <Button onClick={() => search()} disabled={!uid.trim() || isFetching} className="gap-2">
+            {isFetching ? <Loader2 className="size-4 animate-spin" /> : null}
             Rechercher
           </Button>
-          {state !== "idle" && (
+          {displayState !== "idle" && (
             <Button variant="outline" onClick={reset}>
               Réinitialiser
             </Button>
@@ -98,14 +108,14 @@ export default function NfcVerifyPage() {
         </div>
 
         {/* Quick scan demos */}
-        {state === "idle" && (
+        {displayState === "idle" && nfcVehicles.length > 0 && (
           <div className="mt-4">
             <p className="mb-2 text-xs text-muted-foreground">Tester avec une carte enregistrée :</p>
             <div className="flex flex-wrap gap-2">
               {nfcVehicles.slice(0, 5).map((v) => (
                 <button
                   key={v.id}
-                  onClick={() => handleQuickScan(v)}
+                  onClick={() => handleQuickScan(v.nfcUid!)}
                   className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1 text-xs font-mono transition-colors hover:bg-muted"
                 >
                   <CreditCard className="size-3 text-muted-foreground" />
@@ -118,7 +128,7 @@ export default function NfcVerifyPage() {
       </div>
 
       {/* Results */}
-      {state === "found" && result && (
+      {!isFetching && displayState === "found" && result && (
         <div className="mx-auto w-full max-w-3xl space-y-6">
           {/* Match banner */}
           <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-green-200 bg-green-50 px-5 py-4 dark:border-green-900/40 dark:bg-green-900/20">
@@ -135,9 +145,7 @@ export default function NfcVerifyPage() {
                 </p>
               </div>
             </div>
-            <span
-              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${statusConfig[result.status].className}`}
-            >
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${statusConfig[result.status].className}`}>
               {statusConfig[result.status].label}
             </span>
           </div>
@@ -145,13 +153,15 @@ export default function NfcVerifyPage() {
           {/* Vehicle summary */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-3">
-              <PlateBadge
-                province={result.plateProvince}
-                digits={result.plateDigits}
-                letters={result.plateLetters}
-                year={result.plateYear}
-                size="lg"
-              />
+              {result.plateProvinceCode && (
+                <PlateBadge
+                  province={result.plateProvinceCode}
+                  digits={result.plateDigits ?? ""}
+                  letters={result.plateLetters ?? ""}
+                  year={result.plateYear ?? undefined}
+                  size="lg"
+                />
+              )}
               <div>
                 <p className="text-lg font-semibold">{result.owner}</p>
                 <p className="text-sm text-muted-foreground">
@@ -177,7 +187,7 @@ export default function NfcVerifyPage() {
         </div>
       )}
 
-      {state === "not_found" && (
+      {!isFetching && displayState === "not_found" && (
         <div className="mx-auto flex w-full max-w-xl flex-col items-center gap-4 rounded-xl border border-dashed py-12 text-center">
           <div className="flex size-14 items-center justify-center rounded-full bg-muted">
             <SearchX className="size-6 text-muted-foreground" />

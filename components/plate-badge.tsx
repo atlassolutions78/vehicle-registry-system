@@ -68,7 +68,7 @@ export function PlateBadge({
       >
         <span className={s.flag}>🇨🇩</span>
         <span className={cn("font-black uppercase leading-none", s.province)}>
-          CGO
+          {province}
         </span>
       </div>
 

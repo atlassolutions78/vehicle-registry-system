@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { CheckCircle2 } from "lucide-react"
+import { CheckCircle2, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,7 +22,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { PlateBadge } from "@/components/plate-badge"
-import { mockVehiclesForAssign } from "./mock-data"
+import { trpc } from "@/lib/trpc/client"
+import { toast } from "sonner"
 
 interface NewPlateSheetProps {
   open: boolean
@@ -44,25 +45,54 @@ export function NewPlateSheet({ open, onOpenChange }: NewPlateSheetProps) {
   const [digits, setDigits] = useState("")
   const [letters, setLetters] = useState("")
   const year = PROVINCE_YEARS[province]
-  const [vehicle, setVehicle] = useState("")
+  const [vehicleId, setVehicleId] = useState("")
   const [confirmed, setConfirmed] = useState(false)
+  const utils = trpc.useUtils()
+
+  const { data: vehiclesData } = trpc.vehicles.list.useQuery(
+    { withoutPlate: true, limit: 100 },
+    { enabled: open },
+  )
+
+  const createPlate = trpc.plates.create.useMutation()
+  const assignToVehicle = trpc.plates.assignToVehicle.useMutation()
 
   const isValid =
     province.length > 0 &&
     /^\d{4}$/.test(digits) &&
     /^[A-Za-z]{2}$/.test(letters)
 
-  function handleConfirm() {
+  const isPending = createPlate.isPending || assignToVehicle.isPending
+  const error = createPlate.error?.message ?? assignToVehicle.error?.message
+
+  async function handleConfirm() {
     if (!isValid) return
-    setConfirmed(true)
+    try {
+      const newPlate = await createPlate.mutateAsync({
+        provinceCode: province,
+        digits,
+        letters: letters.toUpperCase(),
+        year,
+      })
+      if (vehicleId) {
+        await assignToVehicle.mutateAsync({ plateId: newPlate.id, vehicleId })
+      }
+      utils.plates.list.invalidate()
+      toast.success(vehicleId ? "Plaque attribuée avec succès" : "Plaque enregistrée avec succès")
+      setConfirmed(true)
+    } catch {
+      // error shown via mutation error state
+    }
   }
 
   function handleClose() {
     setProvince("NKV")
     setDigits("")
     setLetters("")
-    setVehicle("")
+    setVehicleId("")
     setConfirmed(false)
+    createPlate.reset()
+    assignToVehicle.reset()
     onOpenChange(false)
   }
 
@@ -155,14 +185,14 @@ export function NewPlateSheet({ open, onOpenChange }: NewPlateSheetProps) {
                 </p>
                 <div className="flex flex-col gap-2">
                   <Label>Véhicule</Label>
-                  <Select value={vehicle} onValueChange={setVehicle}>
+                  <Select value={vehicleId} onValueChange={setVehicleId}>
                     <SelectTrigger>
                       <SelectValue placeholder="Laisser disponible…" />
                     </SelectTrigger>
                     <SelectContent>
-                      {mockVehiclesForAssign.map((v) => (
+                      {vehiclesData?.rows.map((v) => (
                         <SelectItem key={v.id} value={v.id}>
-                          {v.label}
+                          {v.owner} — {v.make} {v.type}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -172,14 +202,22 @@ export function NewPlateSheet({ open, onOpenChange }: NewPlateSheetProps) {
                   </p>
                 </div>
               </div>
+
+              {error && (
+                <p className="text-sm text-destructive">{error}</p>
+              )}
             </div>
 
             <SheetFooter className="flex-row gap-2 border-t px-6 py-4">
-              <Button variant="outline" className="flex-1" onClick={handleClose}>
+              <Button variant="outline" className="flex-1" onClick={handleClose} disabled={isPending}>
                 Annuler
               </Button>
-              <Button className="flex-1" disabled={!isValid} onClick={handleConfirm}>
-                {vehicle ? "Attribuer" : "Enregistrer"}
+              <Button className="flex-1 gap-2" disabled={!isValid || isPending} onClick={handleConfirm}>
+                {isPending ? (
+                  <><Loader2 className="size-4 animate-spin" />En cours…</>
+                ) : (
+                  vehicleId ? "Attribuer" : "Enregistrer"
+                )}
               </Button>
             </SheetFooter>
           </>
@@ -190,10 +228,10 @@ export function NewPlateSheet({ open, onOpenChange }: NewPlateSheetProps) {
             </div>
             <div>
               <p className="font-semibold">
-                {vehicle ? "Plaque attribuée !" : "Plaque enregistrée !"}
+                {vehicleId ? "Plaque attribuée !" : "Plaque enregistrée !"}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {vehicle
+                {vehicleId
                   ? "La plaque a été liée au véhicule sélectionné."
                   : "La plaque est maintenant disponible dans le système."}
               </p>

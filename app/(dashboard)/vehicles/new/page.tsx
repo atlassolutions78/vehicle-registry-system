@@ -2,7 +2,9 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Check, CheckCircle } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, Check, CheckCircle, Loader2 } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,9 +19,9 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { CarteRoseFrontPreview } from "./_components/carte-rose-front-preview"
 import { CarteRoseBackPreview } from "./_components/carte-rose-back-preview"
+import { trpc } from "@/lib/trpc/client"
 
 const PROVINCE_YEARS: Record<string, string> = { NKV: "19", SKV: "22" }
-
 const USAGE_OPTIONS = ["Privé", "Commercial", "Officiel", "Diplomatique"]
 const COLOR_OPTIONS = ["Blanc", "Noir", "Argent", "Gris", "Rouge", "Bleu", "Vert", "Jaune", "Marron"]
 
@@ -60,31 +62,19 @@ function StepIndicator({ current }: { current: number }) {
       {STEPS.map((step, idx) => (
         <div key={step.num} className="flex items-center">
           <div className="flex flex-col items-center gap-1">
-            <div
-              className={`flex size-8 items-center justify-center rounded-full text-sm font-semibold transition-colors ${
-                current > step.num
-                  ? "bg-foreground text-background"
-                  : current === step.num
-                  ? "bg-foreground text-background"
-                  : "border-2 border-muted-foreground/30 text-muted-foreground"
-              }`}
-            >
+            <div className={`flex size-8 items-center justify-center rounded-full text-sm font-semibold transition-colors ${
+              current > step.num ? "bg-foreground text-background"
+              : current === step.num ? "bg-foreground text-background"
+              : "border-2 border-muted-foreground/30 text-muted-foreground"
+            }`}>
               {current > step.num ? <Check className="size-4" /> : step.num}
             </div>
-            <span
-              className={`text-xs ${
-                current === step.num ? "font-medium text-foreground" : "text-muted-foreground"
-              }`}
-            >
+            <span className={`text-xs ${current === step.num ? "font-medium text-foreground" : "text-muted-foreground"}`}>
               {step.label}
             </span>
           </div>
           {idx < STEPS.length - 1 && (
-            <div
-              className={`mb-5 h-px w-20 transition-colors ${
-                current > idx + 1 ? "bg-foreground" : "bg-border"
-              }`}
-            />
+            <div className={`mb-5 h-px w-20 transition-colors ${current > idx + 1 ? "bg-foreground" : "bg-border"}`} />
           )}
         </div>
       ))}
@@ -93,6 +83,7 @@ function StepIndicator({ current }: { current: number }) {
 }
 
 export default function NewVehiclePage() {
+  const router = useRouter()
   const [step, setStep] = useState(1)
   const [data, setData] = useState<FormData>(initial)
   const [submitted, setSubmitted] = useState(false)
@@ -103,23 +94,66 @@ export default function NewVehiclePage() {
 
   const plateYear = PROVINCE_YEARS[data.plateProvince]
 
+  // Live plate availability check
+  const isValidPlateInput = /^\d{4}$/.test(data.plateDigits) && /^[A-Za-z]{2}$/.test(data.plateLetters)
+  const { data: foundPlate } = trpc.plates.check.useQuery(
+    { provinceCode: data.plateProvince, digits: data.plateDigits, letters: data.plateLetters.toUpperCase() },
+    { enabled: isValidPlateInput },
+  )
+
+  const createVehicle = trpc.vehicles.create.useMutation()
+  const assignToVehicle = trpc.plates.assignToVehicle.useMutation()
+
+  const isPending = createVehicle.isPending || assignToVehicle.isPending
+  const error = createVehicle.error?.message ?? assignToVehicle.error?.message
+
   const step1Valid =
-    data.owner.trim() &&
-    data.address.trim() &&
-    data.taxNumber.trim() &&
-    data.usage &&
-    data.firstCirculation.trim() &&
-    /^\d{4}$/.test(data.plateDigits) &&
-    /^[A-Za-z]{2}$/.test(data.plateLetters)
+    data.owner.trim() && data.address.trim() && data.taxNumber.trim() &&
+    data.usage && data.firstCirculation.trim() &&
+    /^\d{4}$/.test(data.plateDigits) && /^[A-Za-z]{2}$/.test(data.plateLetters)
 
   const step2Valid =
-    data.make.trim() &&
-    data.type.trim() &&
-    data.chassisNumber.trim() &&
-    data.engineNumber.trim() &&
-    data.yearFabrication.trim() &&
-    data.color &&
-    data.fiscalPower.trim()
+    data.make.trim() && data.type.trim() && data.chassisNumber.trim() &&
+    data.engineNumber.trim() && data.yearFabrication.trim() && data.color && data.fiscalPower.trim()
+
+  async function handleSubmit() {
+    try {
+      const newVehicle = await createVehicle.mutateAsync({
+        owner: data.owner,
+        address: data.address,
+        taxNumber: data.taxNumber,
+        usage: data.usage,
+        firstCirculation: parseInt(data.firstCirculation),
+        make: data.make,
+        type: data.type,
+        chassisNumber: data.chassisNumber,
+        engineNumber: data.engineNumber,
+        yearFabrication: parseInt(data.yearFabrication),
+        color: data.color,
+        fiscalPower: parseInt(data.fiscalPower),
+      })
+
+      if (foundPlate?.id && foundPlate.status === "disponible") {
+        await assignToVehicle.mutateAsync({ plateId: foundPlate.id, vehicleId: newVehicle.id })
+      }
+
+      toast.success("Véhicule enregistré avec succès")
+      setSubmitted(true)
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Une erreur est survenue")
+    }
+  }
+
+  // Plate status hint
+  const plateHint = isValidPlateInput && foundPlate !== undefined ? (
+    foundPlate === null ? (
+      <p className="text-xs text-muted-foreground">Plaque introuvable — elle sera créée sans plaque.</p>
+    ) : foundPlate.status === "disponible" ? (
+      <p className="text-xs text-green-600">Plaque disponible — sera attribuée automatiquement.</p>
+    ) : (
+      <p className="text-xs text-destructive">Plaque déjà attribuée à {foundPlate.owner ?? "un autre véhicule"}.</p>
+    )
+  ) : null
 
   if (submitted) {
     return (
@@ -130,7 +164,7 @@ export default function NewVehiclePage() {
         <div>
           <h2 className="text-lg font-semibold">Véhicule enregistré avec succès</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Le véhicule a été ajouté au registre. Vous pouvez maintenant lui attribuer une carte NFC.
+            Le véhicule a été ajouté au registre.
           </p>
         </div>
         <div className="flex gap-3">
@@ -147,134 +181,76 @@ export default function NewVehiclePage() {
 
   return (
     <div className="flex flex-col gap-8 p-6">
-      {/* Back + title */}
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2 w-fit text-muted-foreground">
-          <Link href="/vehicles">
-            <ArrowLeft className="size-4" />
-            Retour aux véhicules
-          </Link>
+          <Link href="/vehicles"><ArrowLeft className="size-4" />Retour aux véhicules</Link>
         </Button>
         <h1 className="mt-2 text-xl font-semibold">Enregistrer un véhicule</h1>
       </div>
 
-      {/* Step indicator */}
       <StepIndicator current={step} />
 
       {/* ── STEP 1 ── */}
       {step === 1 && (
         <div className="flex flex-col gap-6">
-          <CarteRoseFrontPreview
-            data={{ ...data, plateYear }}
-          />
-
+          <CarteRoseFrontPreview data={{ ...data, plateYear }} />
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2 sm:col-span-2">
               <Label>Nom ou Raison Sociale *</Label>
-              <Input
-                placeholder="Ex : Jean Mbeki ou Société SAMBU SPRL"
-                value={data.owner}
-                onChange={(e) => set("owner", e.target.value)}
-              />
+              <Input placeholder="Ex : Jean Mbeki ou Société SAMBU SPRL" value={data.owner} onChange={(e) => set("owner", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2 sm:col-span-2">
               <Label>Adresse *</Label>
-              <Textarea
-                placeholder="Av. Kasa-Vubu, N°14, Commune de Lingwala, Kinshasa"
-                rows={2}
-                value={data.address}
-                onChange={(e) => set("address", e.target.value)}
-              />
+              <Textarea placeholder="Av. Kasa-Vubu, N°14, Commune de Lingwala, Kinshasa" rows={2} value={data.address} onChange={(e) => set("address", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Numéro Impôt *</Label>
-              <Input
-                placeholder="A1234567B"
-                value={data.taxNumber}
-                onChange={(e) => set("taxNumber", e.target.value)}
-              />
+              <Input placeholder="A1234567B" value={data.taxNumber} onChange={(e) => set("taxNumber", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Usage *</Label>
               <Select value={data.usage} onValueChange={(v) => set("usage", v)}>
                 <SelectTrigger><SelectValue placeholder="Sélectionner..." /></SelectTrigger>
                 <SelectContent>
-                  {USAGE_OPTIONS.map((u) => (
-                    <SelectItem key={u} value={u}>{u}</SelectItem>
-                  ))}
+                  {USAGE_OPTIONS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label>Année 1ère Circulation *</Label>
-              <Input
-                type="number"
-                placeholder="2020"
-                min={1950}
-                max={new Date().getFullYear()}
-                value={data.firstCirculation}
-                onChange={(e) => set("firstCirculation", e.target.value)}
-              />
+              <Input type="number" placeholder="2020" min={1950} max={new Date().getFullYear()} value={data.firstCirculation} onChange={(e) => set("firstCirculation", e.target.value)} />
             </div>
-
-            {/* Plate */}
             <div className="flex flex-col gap-2 sm:col-span-2">
               <Label>Numéro de plaque *</Label>
               <div className="grid grid-cols-4 gap-3">
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">Province</span>
                   <Select value={data.plateProvince} onValueChange={(v) => set("plateProvince", v)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="NKV">
-                        <span className="font-mono font-semibold">NKV</span>
-                        <span className="ml-2 text-muted-foreground">Nord-Kivu</span>
-                      </SelectItem>
-                      <SelectItem value="SKV">
-                        <span className="font-mono font-semibold">SKV</span>
-                        <span className="ml-2 text-muted-foreground">Sud-Kivu</span>
-                      </SelectItem>
+                      <SelectItem value="NKV"><span className="font-mono font-semibold">NKV</span><span className="ml-2 text-muted-foreground">Nord-Kivu</span></SelectItem>
+                      <SelectItem value="SKV"><span className="font-mono font-semibold">SKV</span><span className="ml-2 text-muted-foreground">Sud-Kivu</span></SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">Numéro</span>
-                  <Input
-                    className="font-mono tracking-widest"
-                    placeholder="0000"
-                    maxLength={4}
-                    value={data.plateDigits}
-                    onChange={(e) => set("plateDigits", e.target.value.replace(/\D/g, ""))}
-                  />
+                  <Input className="font-mono tracking-widest" placeholder="0000" maxLength={4} value={data.plateDigits} onChange={(e) => set("plateDigits", e.target.value.replace(/\D/g, ""))} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">Suffixe</span>
-                  <Input
-                    className="font-mono uppercase tracking-widest"
-                    placeholder="AA"
-                    maxLength={2}
-                    value={data.plateLetters}
-                    onChange={(e) => set("plateLetters", e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase())}
-                  />
+                  <Input className="font-mono uppercase tracking-widest" placeholder="AA" maxLength={2} value={data.plateLetters} onChange={(e) => set("plateLetters", e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase())} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">Année</span>
-                  <Input
-                    className="font-mono bg-muted text-muted-foreground"
-                    readOnly
-                    value={plateYear}
-                  />
+                  <Input className="font-mono bg-muted text-muted-foreground" readOnly value={plateYear} />
                 </div>
               </div>
+              {plateHint}
             </div>
           </div>
-
           <div className="flex justify-end">
-            <Button onClick={() => setStep(2)} disabled={!step1Valid}>
-              Suivant →
-            </Button>
+            <Button onClick={() => setStep(2)} disabled={!step1Valid}>Suivant →</Button>
           </div>
         </div>
       )}
@@ -283,115 +259,69 @@ export default function NewVehiclePage() {
       {step === 2 && (
         <div className="flex flex-col gap-6">
           <CarteRoseBackPreview data={data} />
-
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label>Marque *</Label>
-              <Input
-                placeholder="Toyota, Mercedes, Ford..."
-                value={data.make}
-                onChange={(e) => set("make", e.target.value)}
-              />
+              <Input placeholder="Toyota, Mercedes, Ford..." value={data.make} onChange={(e) => set("make", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Type / Modèle *</Label>
-              <Input
-                placeholder="Corolla, Sprinter, Transit..."
-                value={data.type}
-                onChange={(e) => set("type", e.target.value)}
-              />
+              <Input placeholder="Corolla, Sprinter, Transit..." value={data.type} onChange={(e) => set("type", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>N° Châssis *</Label>
-              <Input
-                className="font-mono"
-                placeholder="JTDBL40E099123456"
-                value={data.chassisNumber}
-                onChange={(e) => set("chassisNumber", e.target.value.toUpperCase())}
-              />
+              <Input className="font-mono" placeholder="JTDBL40E099123456" value={data.chassisNumber} onChange={(e) => set("chassisNumber", e.target.value.toUpperCase())} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>N° Moteur *</Label>
-              <Input
-                className="font-mono"
-                placeholder="2ZR9834521"
-                value={data.engineNumber}
-                onChange={(e) => set("engineNumber", e.target.value.toUpperCase())}
-              />
+              <Input className="font-mono" placeholder="2ZR9834521" value={data.engineNumber} onChange={(e) => set("engineNumber", e.target.value.toUpperCase())} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Année de fabrication *</Label>
-              <Input
-                type="number"
-                placeholder="2020"
-                min={1950}
-                max={new Date().getFullYear()}
-                value={data.yearFabrication}
-                onChange={(e) => set("yearFabrication", e.target.value)}
-              />
+              <Input type="number" placeholder="2020" min={1950} max={new Date().getFullYear()} value={data.yearFabrication} onChange={(e) => set("yearFabrication", e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Couleur *</Label>
               <Select value={data.color} onValueChange={(v) => set("color", v)}>
                 <SelectTrigger><SelectValue placeholder="Sélectionner..." /></SelectTrigger>
                 <SelectContent>
-                  {COLOR_OPTIONS.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
+                  {COLOR_OPTIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label>Puissance Fiscale (CV) *</Label>
-              <Input
-                type="number"
-                placeholder="7"
-                min={1}
-                value={data.fiscalPower}
-                onChange={(e) => set("fiscalPower", e.target.value)}
-              />
+              <Input type="number" placeholder="7" min={1} value={data.fiscalPower} onChange={(e) => set("fiscalPower", e.target.value)} />
             </div>
           </div>
-
           <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(1)}>
-              ← Retour
-            </Button>
-            <Button onClick={() => setStep(3)} disabled={!step2Valid}>
-              Suivant →
-            </Button>
+            <Button variant="outline" onClick={() => setStep(1)}>← Retour</Button>
+            <Button onClick={() => setStep(3)} disabled={!step2Valid}>Suivant →</Button>
           </div>
         </div>
       )}
 
-      {/* ── STEP 3 — Confirmation ── */}
+      {/* ── STEP 3 ── */}
       {step === 3 && (
         <div className="flex flex-col gap-6">
           <p className="text-sm text-muted-foreground">
-            Vérifiez les informations avant de soumettre. Les deux faces de la Carte Rose sont générées à partir de vos saisies.
+            Vérifiez les informations avant de soumettre.
           </p>
-
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Face 1 — Propriétaire
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Face 1 — Propriétaire</p>
               <CarteRoseFrontPreview data={{ ...data, plateYear }} />
             </div>
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Face 2 — Véhicule
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Face 2 — Véhicule</p>
               <CarteRoseBackPreview data={data} />
             </div>
           </div>
-
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(2)}>
-              ← Retour
-            </Button>
-            <Button onClick={() => setSubmitted(true)}>
-              Enregistrer le véhicule
+            <Button variant="outline" onClick={() => setStep(2)} disabled={isPending}>← Retour</Button>
+            <Button onClick={handleSubmit} disabled={isPending} className="gap-2">
+              {isPending ? <><Loader2 className="size-4 animate-spin" />En cours…</> : "Enregistrer le véhicule"}
             </Button>
           </div>
         </div>

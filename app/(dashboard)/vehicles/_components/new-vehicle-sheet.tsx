@@ -1,7 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { Check, CheckCircle2 } from "lucide-react"
+import { Check, CheckCircle2, Loader2 } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,6 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { CarteRoseFrontPreview } from "../new/_components/carte-rose-front-preview"
 import { CarteRoseBackPreview } from "../new/_components/carte-rose-back-preview"
+import { trpc } from "@/lib/trpc/client"
 
 const PROVINCE_YEARS: Record<string, string> = { NKV: "19", SKV: "22" }
 const USAGE_OPTIONS = ["Privé", "Commercial", "Officiel", "Diplomatique"]
@@ -98,19 +100,26 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
   const [step, setStep] = useState(1)
   const [data, setData] = useState<FormData>(initial)
   const [confirmed, setConfirmed] = useState(false)
+  const utils = trpc.useUtils()
 
   function set(field: keyof FormData, value: string) {
     setData((prev) => ({ ...prev, [field]: value }))
   }
 
-  function handleClose() {
-    setStep(1)
-    setData(initial)
-    setConfirmed(false)
-    onOpenChange(false)
-  }
-
   const plateYear = PROVINCE_YEARS[data.plateProvince]
+
+  // Live plate availability check
+  const isValidPlateInput = /^\d{4}$/.test(data.plateDigits) && /^[A-Za-z]{2}$/.test(data.plateLetters)
+  const { data: foundPlate } = trpc.plates.check.useQuery(
+    { provinceCode: data.plateProvince, digits: data.plateDigits, letters: data.plateLetters.toUpperCase() },
+    { enabled: open && isValidPlateInput },
+  )
+
+  const createVehicle = trpc.vehicles.create.useMutation()
+  const assignToVehicle = trpc.plates.assignToVehicle.useMutation()
+
+  const isPending = createVehicle.isPending || assignToVehicle.isPending
+  const error = createVehicle.error?.message ?? assignToVehicle.error?.message
 
   const step1Valid =
     data.owner.trim() &&
@@ -128,6 +137,58 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
     data.color &&
     data.fiscalPower.trim()
 
+  async function handleSubmit() {
+    try {
+      const newVehicle = await createVehicle.mutateAsync({
+        owner: data.owner,
+        address: data.address,
+        taxNumber: data.taxNumber,
+        usage: data.usage,
+        firstCirculation: parseInt(data.firstCirculation),
+        make: data.make,
+        type: data.type,
+        chassisNumber: data.chassisNumber,
+        engineNumber: data.engineNumber,
+        yearFabrication: parseInt(data.yearFabrication),
+        color: data.color,
+        fiscalPower: parseInt(data.fiscalPower),
+        nfcUid: data.nfcUid || undefined,
+      })
+
+      // Link the plate if one was specified and is available
+      if (foundPlate?.id && foundPlate.status === "disponible") {
+        await assignToVehicle.mutateAsync({ plateId: foundPlate.id, vehicleId: newVehicle.id })
+      }
+
+      utils.vehicles.list.invalidate()
+      utils.plates.list.invalidate()
+      toast.success("Véhicule enregistré avec succès")
+      setConfirmed(true)
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Une erreur est survenue")
+    }
+  }
+
+  function handleClose() {
+    setStep(1)
+    setData(initial)
+    setConfirmed(false)
+    createVehicle.reset()
+    assignToVehicle.reset()
+    onOpenChange(false)
+  }
+
+  // Plate status indicator
+  const plateStatusEl = isValidPlateInput && foundPlate !== undefined ? (
+    foundPlate === null ? (
+      <p className="text-xs text-muted-foreground">Plaque introuvable dans le système — elle sera créée sans plaque.</p>
+    ) : foundPlate.status === "disponible" ? (
+      <p className="text-xs text-green-600">Plaque disponible — sera attribuée automatiquement.</p>
+    ) : (
+      <p className="text-xs text-destructive">Plaque déjà attribuée à {foundPlate.owner ?? "un autre véhicule"}.</p>
+    )
+  ) : null
+
   return (
     <Sheet open={open} onOpenChange={handleClose}>
       <SheetContent className="flex flex-col gap-0 sm:max-w-2xl">
@@ -142,12 +203,10 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
               </SheetDescription>
             </SheetHeader>
 
-            {/* Step indicator */}
             <div className="flex justify-center border-b px-6 pb-4">
               <StepIndicator current={step} />
             </div>
 
-            {/* Step content */}
             <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
 
               {/* ── Step 1 ── */}
@@ -180,6 +239,34 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
                       <Label>Année 1ère Circulation *</Label>
                       <Input type="number" placeholder="2020" min={1950} max={new Date().getFullYear()} value={data.firstCirculation} onChange={(e) => set("firstCirculation", e.target.value)} />
                     </div>
+                    {/* <div className="flex flex-col gap-2 sm:col-span-2">
+                      <Label>Numéro de plaque <span className="font-normal text-muted-foreground">(optionnel)</span></Label>
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">Province</span>
+                          <Select value={data.plateProvince} onValueChange={(v) => set("plateProvince", v)}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="NKV"><span className="font-mono font-semibold">NKV</span><span className="ml-2 text-muted-foreground">Nord-Kivu</span></SelectItem>
+                              <SelectItem value="SKV"><span className="font-mono font-semibold">SKV</span><span className="ml-2 text-muted-foreground">Sud-Kivu</span></SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">Numéro</span>
+                          <Input className="font-mono tracking-widest" placeholder="0000" maxLength={4} value={data.plateDigits} onChange={(e) => set("plateDigits", e.target.value.replace(/\D/g, ""))} />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">Suffixe</span>
+                          <Input className="font-mono uppercase tracking-widest" placeholder="AA" maxLength={2} value={data.plateLetters} onChange={(e) => set("plateLetters", e.target.value.replace(/[^a-zA-Z]/g, "").toUpperCase())} />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">Année</span>
+                          <Input className="font-mono bg-muted text-muted-foreground" readOnly value={plateYear} />
+                        </div>
+                      </div>
+                      {plateStatusEl}
+                    </div> */}
                   </div>
                 </>
               )}
@@ -224,15 +311,7 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
                     </div>
                     <div className="flex flex-col gap-2 sm:col-span-2">
                       <Label>UID Carte NFC <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
-                      <Input
-                        className="font-mono"
-                        placeholder="04:A3:2B:1F:9C:00"
-                        value={data.nfcUid}
-                        onChange={(e) => set("nfcUid", e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Laissez vide si la carte NFC n&apos;est pas encore disponible.
-                      </p>
+                      <Input className="font-mono" placeholder="04:A3:2B:1F:9C:00" value={data.nfcUid} onChange={(e) => set("nfcUid", e.target.value)} />
                     </div>
                   </div>
                 </>
@@ -249,15 +328,15 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Face 2 — Véhicule</p>
                     <CarteRoseBackPreview data={data} />
                   </div>
+                  {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
               )}
 
             </div>
 
-            {/* Footer */}
             <SheetFooter className="flex-row gap-2 border-t px-6 py-4">
               {step > 1 ? (
-                <Button variant="outline" className="flex-1" onClick={() => setStep((s) => s - 1)}>
+                <Button variant="outline" className="flex-1" onClick={() => setStep((s) => s - 1)} disabled={isPending}>
                   ← Retour
                 </Button>
               ) : (
@@ -274,8 +353,8 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
                   Suivant →
                 </Button>
               ) : (
-                <Button className="flex-1" onClick={() => setConfirmed(true)}>
-                  Enregistrer
+                <Button className="flex-1 gap-2" onClick={handleSubmit} disabled={isPending}>
+                  {isPending ? <><Loader2 className="size-4 animate-spin" />En cours…</> : "Enregistrer"}
                 </Button>
               )}
             </SheetFooter>
@@ -287,13 +366,9 @@ export function NewVehicleSheet({ open, onOpenChange }: NewVehicleSheetProps) {
             </div>
             <div>
               <p className="font-semibold">Véhicule enregistré !</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Le véhicule a été ajouté au registre.
-              </p>
+              <p className="mt-1 text-sm text-muted-foreground">Le véhicule a été ajouté au registre.</p>
             </div>
-            <Button variant="outline" onClick={handleClose}>
-              Fermer
-            </Button>
+            <Button variant="outline" onClick={handleClose}>Fermer</Button>
           </div>
         )}
       </SheetContent>
